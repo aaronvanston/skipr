@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { render } from "ink-testing-library";
-import { App, type AppServices } from "./App";
+import { App, type AppServices } from "../tui/App";
 import type { PendingAction, Profile, SessionInfo, UsageSnapshot } from "../types";
 import { DEFAULT_CONFIG } from "../config";
 
@@ -26,11 +26,15 @@ function makeServices(over: Partial<AppServices> = {}): { services: AppServices;
     config: DEFAULT_CONFIG,
     loadCache: () => ({}),
     fetchUsage: async () => SNAP,
+    mergeSnapshot: (_prev, next) => next,
     saveCache: () => {},
-    createProfile: (name) => ({ name, configDir: `/p/${name}`, meta: { agent: "claude", createdAt: "" } }),
+    createProfile: (name, agent) => ({ name, configDir: `/p/${name}`, meta: { agent, createdAt: "" } }),
     deleteProfile: () => {},
     saveLaunchCommand: () => {},
     saveLabel: () => {},
+    setDefaultProfile: () => {},
+    isDefaultProfile: () => false,
+    initialSelection: 0,
     listSessions: () => [],
     copySession: (s) => s.id,
     onDone: (a) => actions.push(a),
@@ -87,12 +91,12 @@ describe("App", () => {
     expect(actions).toEqual([{ type: "quit" }]);
   });
 
-  test("n opens name prompt; submitting creates profile and requests login", async () => {
-    const created: string[] = [];
+  test("n prompts for name then agent; picking Codex creates a codex profile and logs in", async () => {
+    const created: Array<[string, string]> = [];
     const { services, actions } = makeServices({
-      createProfile: (name) => {
-        created.push(name);
-        return { name, configDir: `/p/${name}`, meta: { agent: "claude", createdAt: "" } };
+      createProfile: (name, agent) => {
+        created.push([name, agent]);
+        return { name, configDir: `/p/${name}`, meta: { agent, createdAt: "" } };
       },
     });
     const { stdin, lastFrame } = render(<App {...services} />);
@@ -104,9 +108,16 @@ describe("App", () => {
     await tick();
     stdin.write("\r");
     await tick();
-    expect(created).toEqual(["personal"]);
+    expect(lastFrame()).toContain("Agent for personal");
+    expect(lastFrame()).toContain("❯ Claude");
+    expect(lastFrame()).toContain("Codex");
+    stdin.write("\x1b[B"); // → Codex
+    await tick();
+    stdin.write("\r");
+    await tick();
+    expect(created).toEqual([["personal", "codex"]]);
     expect(actions).toEqual([
-      { type: "login", profile: { name: "personal", configDir: "/p/personal", meta: { agent: "claude", createdAt: "" } } },
+      { type: "login", profile: { name: "personal", configDir: "/p/personal", meta: { agent: "codex", createdAt: "" } } },
     ]);
   });
 
@@ -167,6 +178,8 @@ describe("App", () => {
     await tick();
     expect(lastFrame()).toContain("Delete profile");
     stdin.write("\x1b[B"); // → Launch command
+    await tick();
+    stdin.write("\x1b[B"); // → Set as default
     await tick();
     stdin.write("\x1b[B"); // → Delete profile
     await tick();

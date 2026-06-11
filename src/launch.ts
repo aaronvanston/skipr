@@ -1,4 +1,5 @@
 import type { SkipperConfig, Profile } from "./types";
+import { ADAPTERS } from "./providers/registry";
 
 /** v1: whitespace split, no quoting support (documented in README). */
 export function splitCommand(command: string): string[] {
@@ -6,7 +7,7 @@ export function splitCommand(command: string): string[] {
 }
 
 export function resolveLaunchCommand(profile: Profile, config: SkipperConfig): string {
-  return profile.meta.launchCommand ?? config.defaultLaunchCommand;
+  return profile.meta.launchCommand ?? config.providers[profile.meta.agent].launchCommand;
 }
 
 export interface LaunchPlan {
@@ -21,8 +22,13 @@ export function buildLaunchPlan(
 ): LaunchPlan {
   const argv = [...splitCommand(resolveLaunchCommand(profile, config)), ...extraArgs];
   const env = { ...process.env } as Record<string, string>;
-  if (profile.configDir) env.CLAUDE_CONFIG_DIR = profile.configDir;
-  else delete env.CLAUDE_CONFIG_DIR;
+  // never leak any provider's home override - or a shell auth key that would
+  // override the profile's identity - from the parent shell
+  for (const adapter of Object.values(ADAPTERS)) {
+    delete env[adapter.envVar];
+    for (const key of adapter.scrubEnv) delete env[key];
+  }
+  if (profile.configDir) env[ADAPTERS[profile.meta.agent].envVar] = profile.configDir;
   return { argv, env };
 }
 

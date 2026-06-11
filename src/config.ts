@@ -1,18 +1,24 @@
 import { readFileSync } from "node:fs";
-import type { EmailDisplay, SkipperConfig } from "./types";
+import type { EmailDisplay, Provider, ProviderConfig, SkipperConfig } from "./types";
 import { DEFAULT_THRESHOLDS, type Thresholds } from "./format";
 import { configPath } from "./paths";
 import { writeFileAtomic } from "./fsutil";
 
+export const PROVIDERS: Provider[] = ["claude", "codex"];
+
 export const DEFAULT_CONFIG: SkipperConfig = {
-  defaultLaunchCommand: "claude",
+  defaultProvider: "claude",
+  providers: {
+    claude: { launchCommand: "claude" },
+    codex: { launchCommand: "codex" },
+  },
   sharedItems: ["skills", "agents", "commands", "plugins", "CLAUDE.md"],
-  thresholds: { ...DEFAULT_THRESHOLDS },
   emailDisplay: "show",
+  thresholds: { ...DEFAULT_THRESHOLDS },
 };
 
 /** Top-level keys `skipr config set` may touch - typo guard. */
-const KNOWN_KEYS = new Set([...Object.keys(DEFAULT_CONFIG), "defaultProfile"]);
+const KNOWN_KEYS = new Set(Object.keys(DEFAULT_CONFIG));
 
 export function getConfigValue(config: SkipperConfig, path: string): unknown {
   let node: unknown = config;
@@ -67,16 +73,54 @@ function normalizeEmailDisplay(parsed: Record<string, unknown>): EmailDisplay {
   return "show";
 }
 
+/** Per-provider deep merge, including migration from the pre-provider flat
+ * keys (defaultLaunchCommand, codexLaunchCommand, defaultProfile,
+ * codexProfile) so existing configs keep working untouched. */
+function mergeProviders(parsed: Record<string, unknown>): Record<Provider, ProviderConfig> {
+  const merged = structuredClone(DEFAULT_CONFIG.providers);
+  const rawProviders = (parsed.providers ?? {}) as Record<string, Partial<ProviderConfig>>;
+  const legacy: Record<Provider, { command: unknown; profile: unknown }> = {
+    claude: { command: parsed.defaultLaunchCommand, profile: parsed.defaultProfile },
+    codex: { command: parsed.codexLaunchCommand, profile: parsed.codexProfile },
+  };
+  for (const provider of PROVIDERS) {
+    const raw = rawProviders[provider] ?? {};
+    const command = raw.launchCommand ?? legacy[provider].command;
+    if (typeof command === "string" && command.trim()) merged[provider].launchCommand = command;
+    const profile = raw.defaultProfile ?? legacy[provider].profile;
+    if (profile && typeof profile === "object") {
+      merged[provider].defaultProfile = { ...(profile as ProviderConfig["defaultProfile"]) };
+    }
+  }
+  return merged;
+}
+
+function normalizeDefaultProvider(parsed: Record<string, unknown>): Provider {
+  return PROVIDERS.includes(parsed.defaultProvider as Provider)
+    ? (parsed.defaultProvider as Provider)
+    : "claude";
+}
+
+const LEGACY_KEYS = [
+  "anonymizeEmails",
+  "defaultLaunchCommand",
+  "codexLaunchCommand",
+  "defaultProfile",
+  "codexProfile",
+];
+
 export function loadConfig(): SkipperConfig {
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8"));
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) ?? {};
     const config = {
       ...structuredClone(DEFAULT_CONFIG),
       ...parsed,
+      defaultProvider: normalizeDefaultProvider(parsed),
+      providers: mergeProviders(parsed),
       thresholds: mergeThresholds(parsed?.thresholds),
-      emailDisplay: normalizeEmailDisplay(parsed ?? {}),
+      emailDisplay: normalizeEmailDisplay(parsed),
     };
-    delete (config as Record<string, unknown>).anonymizeEmails;
+    for (const key of LEGACY_KEYS) delete (config as Record<string, unknown>)[key];
     return config;
   } catch {
     return structuredClone(DEFAULT_CONFIG);

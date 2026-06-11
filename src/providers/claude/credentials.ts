@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import type { OauthCreds } from "./types";
-import { credentialsPath } from "./paths";
+import type { OauthCreds } from "../../types";
+import { credentialsPath } from "../../paths";
 import { keychainRead, keychainService, keychainWrite } from "./keychain";
-import { writeFileAtomic } from "./fsutil";
+import { writeFileAtomic } from "../../fsutil";
 
 export type CredSource = "keychain" | "file";
 

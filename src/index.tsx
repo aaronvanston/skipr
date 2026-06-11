@@ -4,13 +4,16 @@ import { Box, Text, render, useApp, useInput } from "ink";
 import type { EmailDisplay, Identity, PendingAction, Profile, UsageCache } from "./types";
 import { DEFAULT_CONFIG, getConfigValue, loadConfig, saveConfig, setConfigValue } from "./config";
 import {
-  createProfile, deleteProfile, listProfiles, readIdentity, saveLabel, saveLaunchCommand,
+  createProfile, defaultProfileIndex, defaultProfileName, deleteProfile, isDefaultProfile,
+  listProfiles, readIdentity, saveLabel, saveLaunchCommand, setDefaultProfile,
 } from "./profiles";
-import { getProfileUsage } from "./usage";
+import { getProfileUsage, mergeSnapshot } from "./usage";
 import { loadUsageCache, saveUsageCache } from "./usageCache";
-import { listSessionsForProject, copySessionTo } from "./sessions";
+import { listSessionsForProject, copySessionTo } from "./providers/claude/sessions";
+import { ADAPTERS } from "./providers/registry";
 import { buildLaunchPlan, execPlan, releaseStdin, splitCommand } from "./launch";
 import { planSync, applySync } from "./symlinks";
+import { shellSetupHint, writeShellEnv } from "./shellEnv";
 import { WINDOW_LABELS, displayEmail, resetsIn, tierLabel } from "./format";
 import { existsSync } from "node:fs";
 import { configPath } from "./paths";
@@ -23,8 +26,15 @@ export function formatList(
   usage: UsageCache,
   emailDisplay: EmailDisplay = "show",
 ): string {
-  const lines = ["Claude usage"];
+  const lines: string[] = [];
+  let lastAgent = "";
   for (const profile of profiles) {
+    const agent = profile.meta.agent === "codex" ? "Codex" : "Claude";
+    if (agent !== lastAgent) {
+      if (lines.length > 0) lines.push("");
+      lines.push(`${agent} usage`);
+      lastAgent = agent;
+    }
     const identity = identities[profile.name] ?? { email: null, tier: null };
     const tier = tierLabel(identity.tier);
     const displayName = profile.meta.label ?? profile.name;
@@ -47,7 +57,7 @@ export function formatList(
       const window = snap.windows[key];
       if (!window) continue;
       lines.push(
-        `  - ${label}: ${window.utilization.toFixed(1)}% (resets in ${resetsIn(window.resetsAt)})`,
+        `  - ${label}: ${window.utilization.toFixed(1)}% (resets in ${resetsIn(window.resetsAt)})${snap.stale ? " [cached]" : ""}`,
       );
     }
   }
@@ -59,8 +69,9 @@ function gatherIdentities(profiles: Profile[]): Record<string, Identity> {
 }
 
 async function fetchAllUsage(profiles: Profile[]): Promise<UsageCache> {
+  const previous = loadUsageCache();
   const entries = await Promise.all(
-    profiles.map(async (p) => [p.name, await getProfileUsage(p)] as const),
+    profiles.map(async (p) => [p.name, mergeSnapshot(previous[p.name], await getProfileUsage(p))] as const),
   );
   const cache = Object.fromEntries(entries);
   // deliberate write from read-style commands: keeps the TUI's cached view warm
@@ -125,11 +136,15 @@ function renderOnce(): Promise<PendingAction> {
         config={config}
         loadCache={loadUsageCache}
         fetchUsage={getProfileUsage}
+        mergeSnapshot={mergeSnapshot}
         saveCache={saveUsageCache}
-        createProfile={(name) => createProfile(name, config)}
+        createProfile={(name, agent) => createProfile(name, config, agent)}
         deleteProfile={deleteProfile}
         saveLaunchCommand={saveLaunchCommand}
         saveLabel={saveLabel}
+        setDefaultProfile={setDefaultProfile}
+        isDefaultProfile={(p) => isDefaultProfile(p, config)}
+        initialSelection={defaultProfileIndex(profiles, config)}
         listSessions={(all, exclude) => listSessionsForProject(process.cwd(), all, exclude)}
         copySession={(session, target) => copySessionTo(session, target, process.cwd())}
         onDone={(a) => {
@@ -142,18 +157,23 @@ function renderOnce(): Promise<PendingAction> {
 }
 
 async function runLogin(profile: Profile): Promise<void> {
+  const adapter = ADAPTERS[profile.meta.agent];
   const env = { ...process.env } as Record<string, string>;
-  if (profile.configDir) env.CLAUDE_CONFIG_DIR = profile.configDir;
-  else delete env.CLAUDE_CONFIG_DIR; // mirror buildLaunchPlan: never leak a parent value
-  console.log(`\nLogging in profile '${profile.name}': complete /login in Claude, then exit.\n`);
+  // mirror buildLaunchPlan: never leak home overrides or shell auth keys
+  for (const a of Object.values(ADAPTERS)) {
+    delete env[a.envVar];
+    for (const key of a.scrubEnv) delete env[key];
+  }
+  if (profile.configDir) env[adapter.envVar] = profile.configDir;
+  const argv = [...adapter.loginArgv];
+  console.log(`\nLogging in profile '${profile.name}': complete the ${adapter.label} login flow.\n`);
   releaseStdin();
-  const proc = Bun.spawn(["claude", "/login"], {
-    env,
-    stdin: "inherit",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  await proc.exited;
+  try {
+    const proc = Bun.spawn(argv, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    await proc.exited;
+  } catch {
+    console.error(`failed to launch '${argv[0]}': is it installed and on PATH?`);
+  }
 }
 
 async function runTui(): Promise<void> {
@@ -199,14 +219,12 @@ async function cmdList(): Promise<void> {
 
 async function cmdLaunch(args: string[]): Promise<void> {
   const dashDash = args.indexOf("--");
-  const name = dashDash === 0 ? undefined : args[0];
+  const named = dashDash === 0 ? undefined : args[0];
   const extraArgs = dashDash === -1 ? args.slice(1) : args.slice(dashDash + 1);
-  if (!name) {
-    console.error("usage: skipr launch <name> [-- args]");
-    process.exit(1);
-  }
   const config = loadConfig();
   const profiles = listProfiles(config);
+  // bare `skipr launch` runs the default provider's default profile
+  const name = named ?? defaultProfileName(config, config.defaultProvider);
   const profile = profiles.find((p) => p.name === name);
   if (!profile) {
     console.error(
@@ -226,7 +244,7 @@ async function cmdLaunch(args: string[]): Promise<void> {
 function cmdSync(): void {
   const config = loadConfig();
   for (const profile of listProfiles(config)) {
-    if (!profile.configDir) continue;
+    if (!profile.configDir || profile.meta.agent === "codex") continue;
     for (const action of applySync(planSync(profile.configDir, config.sharedItems))) {
       console.log(`${profile.name}: ${action.item} → ${action.action}`);
     }
@@ -263,6 +281,29 @@ function cmdConfig(args: string[]): void {
   process.exit(1);
 }
 
+/** `skipr default` - show or set per-provider system defaults. */
+function cmdDefault(args: string[]): void {
+  const config = loadConfig();
+  const profiles = listProfiles(config);
+  const [name] = args;
+  if (name) {
+    const profile = profiles.find((p) => p.name === name);
+    if (!profile) {
+      console.error(`unknown profile: ${name}\navailable profiles: ${profiles.map((p) => p.name).join(", ")}`);
+      process.exit(1);
+    }
+    setDefaultProfile(profile);
+    console.log(`${ADAPTERS[profile.meta.agent].label} default profile is now '${name}'`);
+  } else {
+    writeShellEnv(config); // keep env.sh in sync with the config
+    for (const adapter of Object.values(ADAPTERS)) {
+      console.log(`${adapter.label.padEnd(7)} default: ${defaultProfileName(config, adapter.id)}`);
+    }
+  }
+  const hint = shellSetupHint();
+  if (hint) console.log(hint);
+}
+
 function printVersion(): void {
   console.log(pkg.version);
 }
@@ -273,8 +314,9 @@ function printHelp(): void {
 usage:
   skipr                            interactive dashboard
   skipr list                       usage summary for all profiles
-  skipr launch <name> [-- args]    launch a profile directly
+  skipr launch [name] [-- args]    launch a profile (default profile when no name)
   skipr sync                       repair shared-item symlinks
+  skipr default [name]             show or set a provider's default profile
   skipr config                     show config file path and effective config
   skipr config get <key>           read one config value (dot paths ok)
   skipr config set <key> <value>   change a config value (e.g. thresholds.warn 50)
@@ -288,6 +330,7 @@ if (import.meta.main) {
   if (command === "list") await cmdList();
   else if (command === "launch") await cmdLaunch(rest);
   else if (command === "sync") cmdSync();
+  else if (command === "default") cmdDefault(rest);
   else if (command === "config") cmdConfig(rest);
   else if (command === "--version" || command === "-v") printVersion();
   else if (command === "--help" || command === "-h" || command === "help") printHelp();

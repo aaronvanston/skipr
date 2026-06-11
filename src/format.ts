@@ -17,6 +17,7 @@ export function tierLabel(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const max = raw.match(/max_(\d+)x/);
   if (max) return `Max ${max[1]}x`;
+  if (raw.includes("plus")) return "Plus";
   if (raw.includes("pro")) return "Pro";
   if (raw.includes("team")) return "Team";
   return raw;

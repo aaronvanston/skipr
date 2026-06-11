@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatList, formatConfigOutput } from "./index";
-import { DEFAULT_CONFIG } from "./config";
-import { configPath } from "./paths";
-import type { Profile, UsageCache, Identity } from "./types";
+import { formatList, formatConfigOutput } from "../index";
+import { DEFAULT_CONFIG } from "../config";
+import { configPath } from "../paths";
+import type { Profile, UsageCache, Identity } from "../types";
 
 describe("formatList", () => {
   test("renders the issue-30031-style text dump", () => {
@@ -39,16 +39,24 @@ describe("formatList", () => {
 });
 
 describe("skipr launch errors", () => {
-  const entry = join(import.meta.dir, "index.tsx");
+  const entry = join(import.meta.dir, "..", "index.tsx");
 
   function runLaunch(args: string[]) {
     const tmp = mkdtempSync(join(tmpdir(), "skipper-launch-test-"));
     try {
+      const skipperHome = join(tmp, ".skipper");
+      mkdirSync(skipperHome, { recursive: true });
+      // harmless launch command so bare launches don't start a real agent
+      writeFileSync(
+        join(skipperHome, "config.json"),
+        JSON.stringify({ providers: { claude: { launchCommand: "true" } } }),
+      );
       const proc = Bun.spawnSync(["bun", entry, "launch", ...args], {
         env: {
           ...process.env,
-          SKIPPER_HOME: join(tmp, ".skipper"),
+          SKIPPER_HOME: skipperHome,
           SKIPPER_CLAUDE_HOME: join(tmp, ".claude"),
+          SKIPPER_CODEX_HOME: join(tmp, ".codex"),
         },
       });
       return { exitCode: proc.exitCode, stderr: proc.stderr.toString() };
@@ -57,17 +65,15 @@ describe("skipr launch errors", () => {
     }
   }
 
-  test("missing profile name prints usage, not 'unknown profile: undefined'", () => {
+  test("bare launch runs the default provider's default profile", () => {
     const { exitCode, stderr } = runLaunch([]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("usage: skipr launch <name> [-- args]");
-    expect(stderr).not.toContain("undefined");
+    expect(stderr).not.toContain("unknown profile");
+    expect(exitCode).toBe(0); // resolved to the adopted claude default, ran `true`
   });
 
-  test("bare -- with no name prints usage too", () => {
-    const { exitCode, stderr } = runLaunch(["--", "--resume"]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("usage: skipr launch <name> [-- args]");
+  test("bare -- with no name launches the default with extra args", () => {
+    const { exitCode } = runLaunch(["--", "--resume"]);
+    expect(exitCode).toBe(0);
   });
 
   test("unknown profile lists available profiles", () => {
@@ -127,7 +133,7 @@ describe("formatList emailDisplay + labels", () => {
 });
 
 describe("skipr config set/get", () => {
-  const entry = join(import.meta.dir, "index.tsx");
+  const entry = join(import.meta.dir, "..", "index.tsx");
 
   test("set round-trips through get; unknown keys rejected", () => {
     const tmp = mkdtempSync(join(tmpdir(), "skipper-cfg-test-"));

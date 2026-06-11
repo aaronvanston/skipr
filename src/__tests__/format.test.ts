@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resetsIn, tierLabel, barCells, barColor, displayEmail, windowPace, paceColor, DEFAULT_THRESHOLDS, type Thresholds } from "./format";
+import { resetsIn, tierLabel, barCells, barColor, displayEmail, windowPace, paceColor, DEFAULT_THRESHOLDS, type Thresholds } from "../format";
 
 const NOW = Date.parse("2026-06-11T00:00:00Z");
 

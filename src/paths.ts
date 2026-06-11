@@ -9,12 +9,20 @@ export function claudeHome(): string {
   return process.env.SKIPPER_CLAUDE_HOME ?? join(homedir(), ".claude");
 }
 
+export function codexHome(): string {
+  return process.env.SKIPPER_CODEX_HOME ?? join(homedir(), ".codex");
+}
+
 export function profilesDir(): string {
   return join(skipperHome(), "profiles");
 }
 
 export function configPath(): string {
   return join(skipperHome(), "config.json");
+}
+
+export function shellEnvPath(): string {
+  return join(skipperHome(), "env.sh");
 }
 
 export function usageCachePath(): string {

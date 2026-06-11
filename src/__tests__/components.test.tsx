@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import React from "react";
 import { render } from "ink-testing-library";
-import { UsageBar } from "./UsageBar";
-import { ProfileRow } from "./ProfileRow";
-import { SessionPicker } from "./SessionPicker";
-import { StatusFooter } from "./StatusFooter";
+import { UsageBar } from "../tui/UsageBar";
+import { ProfileRow } from "../tui/ProfileRow";
+import { SessionPicker } from "../tui/SessionPicker";
+import { StatusFooter } from "../tui/StatusFooter";
 import type { Profile, UsageSnapshot, SessionInfo } from "../types";
 
 const profile: Profile = { name: "work", configDir: "/p/w", meta: { agent: "claude", createdAt: "" } };

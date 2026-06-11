@@ -2,9 +2,10 @@ import React, { useEffect, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
 import type {
-  Identity, SkipperConfig, PendingAction, Profile, SessionInfo, UsageCache, UsageSnapshot,
+  AgentKind, Identity, SkipperConfig, PendingAction, Profile, SessionInfo, UsageCache, UsageSnapshot,
 } from "../types";
 import { resolveLaunchCommand } from "../launch";
+import { ADAPTERS } from "../providers/registry";
 import { ProfileRow } from "./ProfileRow";
 import { SessionPicker } from "./SessionPicker";
 import { StatusFooter } from "./StatusFooter";
@@ -15,41 +16,46 @@ export interface AppServices {
   config: SkipperConfig;
   loadCache(): UsageCache;
   fetchUsage(profile: Profile): Promise<UsageSnapshot>;
+  mergeSnapshot(previous: UsageSnapshot | undefined, next: UsageSnapshot): UsageSnapshot;
   saveCache(cache: UsageCache): void;
-  createProfile(name: string): Profile;
+  createProfile(name: string, agent: AgentKind): Profile;
   deleteProfile(profile: Profile): void;
   saveLaunchCommand(profile: Profile, command: string): void;
   saveLabel(profile: Profile, label: string): void;
+  setDefaultProfile(profile: Profile): void;
+  isDefaultProfile(profile: Profile): boolean;
+  initialSelection: number;
   listSessions(profiles: Profile[], excludeProfile: string): SessionInfo[];
   copySession(session: SessionInfo, target: Profile): string;
   onDone(action: PendingAction): void;
 }
 
-type Mode = "list" | "editMenu" | "new" | "edit" | "delete" | "label" | "sessions";
+type Mode = "list" | "editMenu" | "new" | "newAgent" | "edit" | "delete" | "label" | "sessions";
 
-const DASHED_BORDER = {
-  topLeft: "┌", top: "┄", topRight: "┐",
-  left: "┆", right: "┆",
-  bottomLeft: "└", bottom: "┄", bottomRight: "┘",
-} as const;
+const AGENT_OPTIONS: Array<{ value: AgentKind; title: string }> = Object.values(ADAPTERS).map(
+  (adapter) => ({ value: adapter.id, title: adapter.label }),
+);
 
-type EditMenuItem = "Label" | "Launch command" | "Delete profile";
+type EditMenuItem = "Label" | "Launch command" | "Set as default" | "Delete profile";
 
-function editMenuItems(profile: Profile): EditMenuItem[] {
+function editMenuItems(profile: Profile, isDefault: boolean): EditMenuItem[] {
   const items: EditMenuItem[] = ["Label", "Launch command"];
-  if (profile.configDir) items.push("Delete profile"); // default profile is undeletable
+  if (!isDefault) items.push("Set as default");
+  if (profile.configDir) items.push("Delete profile"); // adopted home profiles are undeletable
   return items;
 }
 
 export function App(props: AppServices) {
   const { exit } = useApp();
   const [mode, setMode] = useState<Mode>("list");
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(props.initialSelection);
   const [input, setInput] = useState("");
   const [usage, setUsage] = useState<UsageCache>(() => props.loadCache());
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [editIdx, setEditIdx] = useState(0);
+  const [pendingName, setPendingName] = useState("");
+  const [agentIdx, setAgentIdx] = useState(0);
   const [sessionIdx, setSessionIdx] = useState(0);
   const [message, setMessage] = useState("");
 
@@ -68,7 +74,7 @@ export function App(props: AppServices) {
         .fetchUsage(profile)
         .then((snap) => {
           setUsage((u) => {
-            const next = { ...u, [profile.name]: snap };
+            const next = { ...u, [profile.name]: props.mergeSnapshot(u[profile.name], snap) };
             props.saveCache(next);
             return next;
           });
@@ -101,6 +107,10 @@ export function App(props: AppServices) {
         } else if (ch === "c") {
           done({ type: "config" });
         } else if (ch === "m") {
+          if (!ADAPTERS[current.meta.agent].supportsSessionHop) {
+            setMessage(`session hop is not supported for ${ADAPTERS[current.meta.agent].label} yet`);
+            return;
+          }
           const found = props.listSessions(props.profiles, current.name);
           if (found.length === 0) setMessage("no sessions for this project in other profiles");
           else {
@@ -110,7 +120,7 @@ export function App(props: AppServices) {
           }
         }
       } else if (mode === "editMenu") {
-        const items = editMenuItems(current);
+        const items = editMenuItems(current, props.isDefaultProfile(current));
         if (key.escape) setMode("list");
         else if (key.upArrow) setEditIdx((i) => Math.max(0, i - 1));
         else if (key.downArrow) setEditIdx((i) => Math.min(items.length - 1, i + 1));
@@ -122,9 +132,30 @@ export function App(props: AppServices) {
           } else if (picked === "Launch command") {
             setInput(resolveLaunchCommand(current, props.config));
             setMode("edit");
+          } else if (picked === "Set as default") {
+            try {
+              props.setDefaultProfile(current);
+              done({ type: "reload" });
+            } catch (err) {
+              setMessage(String(err instanceof Error ? err.message : err));
+              setMode("list");
+            }
           } else {
             setInput("");
             setMode("delete");
+          }
+        }
+      } else if (mode === "newAgent") {
+        if (key.escape) setMode("list");
+        else if (key.upArrow) setAgentIdx((i) => Math.max(0, i - 1));
+        else if (key.downArrow) setAgentIdx((i) => Math.min(AGENT_OPTIONS.length - 1, i + 1));
+        else if (key.return) {
+          try {
+            const profile = props.createProfile(pendingName, AGENT_OPTIONS[agentIdx].value);
+            done({ type: "login", profile });
+          } catch (err) {
+            setMessage(String(err instanceof Error ? err.message : err));
+            setMode("list");
           }
         }
       } else if (mode === "sessions") {
@@ -137,7 +168,7 @@ export function App(props: AppServices) {
         }
       }
     },
-    { isActive: mode === "list" || mode === "sessions" || mode === "editMenu" },
+    { isActive: mode === "list" || mode === "sessions" || mode === "editMenu" || mode === "newAgent" },
   );
 
   // escape backs out of text-input modes
@@ -149,13 +180,9 @@ export function App(props: AppServices) {
   );
 
   function submitNew(name: string) {
-    try {
-      const profile = props.createProfile(name.trim());
-      done({ type: "login", profile });
-    } catch (err) {
-      setMessage(String(err instanceof Error ? err.message : err));
-      setMode("list");
-    }
+    setPendingName(name.trim());
+    setAgentIdx(0);
+    setMode("newAgent");
   }
 
   function submitEdit(command: string) {
@@ -197,28 +224,41 @@ export function App(props: AppServices) {
     <Box flexDirection="column" paddingX={1}>
       <Text bold>skipr</Text>
       <Text> </Text>
-      <Text bold color="cyan">
-        › Claude
-      </Text>
-      {props.profiles.map((profile, i) => (
-        <ProfileRow
-          key={profile.name}
-          profile={profile}
-          identity={props.identities[profile.name] ?? { email: null, tier: null }}
-          usage={usage[profile.name]}
-          loading={loading[profile.name] ?? false}
-          selected={i === selected && mode === "list"}
-          thresholds={props.config.thresholds}
-          emailDisplay={props.config.emailDisplay}
-        />
-      ))}
-      <Box borderStyle={DASHED_BORDER} borderColor="gray" paddingX={1}>
-        <Text dimColor>+ Add profile (n)</Text>
-      </Box>
+      {[...new Set(props.profiles.map((p) => p.meta.agent))].map((agent) => {
+        const group = props.profiles.filter((p) => p.meta.agent === agent);
+        if (group.length === 0) return null;
+        return (
+          <React.Fragment key={agent}>
+            <Text bold color="cyan">
+              {`› ${ADAPTERS[agent].label}`}
+            </Text>
+            {group.map((profile, gi) => {
+              const i = props.profiles.indexOf(profile);
+              const position =
+                group.length === 1 ? "only" : gi === 0 ? "first" : gi === group.length - 1 ? "last" : "middle";
+              return (
+                <ProfileRow
+                  key={profile.name}
+                  profile={profile}
+                  identity={props.identities[profile.name] ?? { email: null, tier: null }}
+                  usage={usage[profile.name]}
+                  loading={loading[profile.name] ?? false}
+                  selected={i === selected && mode === "list"}
+                  thresholds={props.config.thresholds}
+                  emailDisplay={props.config.emailDisplay}
+                  isDefault={props.isDefaultProfile(profile)}
+                  position={position}
+                />
+              );
+            })}
+          </React.Fragment>
+        );
+      })}
+      <Text dimColor>  + Add profile (n)</Text>
       {mode === "editMenu" && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold>Edit {current.meta.label ?? current.name} (esc to cancel)</Text>
-          {editMenuItems(current).map((item, i) => (
+          {editMenuItems(current, props.isDefaultProfile(current)).map((item, i) => (
             <Text key={item} color={i === editIdx ? "cyan" : undefined} bold={i === editIdx}>
               {i === editIdx ? "❯ " : "  "}
               {item}
@@ -227,6 +267,17 @@ export function App(props: AppServices) {
         </Box>
       )}
       {mode === "sessions" && <SessionPicker sessions={sessions} selected={sessionIdx} />}
+      {mode === "newAgent" && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold>{`Agent for ${pendingName} (esc to cancel)`}</Text>
+          {AGENT_OPTIONS.map((option, i) => (
+            <Text key={option.value} color={i === agentIdx ? "cyan" : undefined} bold={i === agentIdx}>
+              {i === agentIdx ? "❯ " : "  "}
+              {option.title}
+            </Text>
+          ))}
+        </Box>
+      )}
       {mode === "new" && (
         <Box marginTop={1}>
           <Text>New profile name: </Text>

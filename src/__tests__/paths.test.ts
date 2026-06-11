@@ -5,7 +5,7 @@ import { join } from "node:path";
 import {
   skipperHome, claudeHome, claudeJsonPath, profilesDir,
   configPath, usageCachePath, credentialsPath,
-} from "./paths";
+} from "../paths";
 
 let tmp: string;
 beforeEach(() => {

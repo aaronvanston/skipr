@@ -1,7 +1,7 @@
 import { describe, expect, test, afterAll } from "bun:test";
 import { unlinkSync } from "node:fs";
-import { refreshTokens, isExpired, CLAUDE_UA, BETA_HEADER } from "./oauth";
-import type { OauthCreds } from "./types";
+import { refreshTokens, isExpired, CLAUDE_UA, BETA_HEADER } from "../providers/claude/oauth";
+import type { OauthCreds } from "../types";
 
 const CREDS: OauthCreds = {
   accessToken: "old-at",

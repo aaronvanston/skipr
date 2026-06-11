@@ -2,8 +2,8 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseCredBlob, credBlob, readCreds, writeCreds } from "./credentials";
-import type { OauthCreds } from "./types";
+import { parseCredBlob, credBlob, readCreds, writeCreds } from "../providers/claude/credentials";
+import type { OauthCreds } from "../types";
 
 const CREDS: OauthCreds = {
   accessToken: "at-1",

@@ -1,6 +1,8 @@
 import type { Thresholds } from "./format";
 
-export type AgentKind = "claude";
+export type Provider = "claude" | "codex";
+/** legacy alias; profile.json files store this under the "agent" key */
+export type AgentKind = Provider;
 
 export type EmailDisplay = "show" | "hide";
 
@@ -43,20 +45,33 @@ export interface UsageWindow {
 export interface UsageSnapshot {
   fetchedAt: number;
   windows: Record<string, UsageWindow>;
-  error?: "needs login" | "usage unavailable";
+  /** display text; the exact value "needs login" also routes ⏎ to the login flow */
+  error?: string;
+  /** the fetch failed and these are the last good numbers, kept on purpose */
+  stale?: boolean;
 }
 
 export type UsageCache = Record<string, UsageSnapshot>;
 
+export interface ProviderConfig {
+  /** launch command for this provider's profiles with no per-profile override */
+  launchCommand: string;
+  /** which profile is this provider's default (dashboard preselect, bare
+   * `skipr launch`); falls back to the adopted home profile */
+  defaultProfileName?: string;
+  /** overrides for the provider's adopted default profile (it has no profile.json) */
+  defaultProfile?: { launchCommand?: string; label?: string };
+}
+
 export interface SkipperConfig {
-  defaultLaunchCommand: string;
+  /** provider listed first in the dashboard */
+  defaultProvider: Provider;
+  providers: Record<Provider, ProviderConfig>;
   sharedItems: string[];
   /** how account emails render in the dashboard and `skipr list` */
   emailDisplay: EmailDisplay;
   /** usage bar/percent turns yellow above warn, red above danger */
   thresholds: Thresholds;
-  /** meta overrides for the default profile (it has no profile.json) */
-  defaultProfile?: { launchCommand?: string; label?: string };
 }
 
 export interface SessionInfo {

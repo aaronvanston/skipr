@@ -2,10 +2,10 @@ import { describe, expect, test, beforeEach, afterEach, afterAll } from "bun:tes
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUsage, fetchUsage, getProfileUsage } from "./usage";
-import { credBlob } from "./credentials";
-import { BETA_HEADER, CLAUDE_UA } from "./oauth";
-import type { Profile } from "./types";
+import { parseUsage, fetchUsage, getProfileUsage, mergeSnapshot } from "../usage";
+import { credBlob } from "../providers/claude/credentials";
+import { BETA_HEADER, CLAUDE_UA } from "../providers/claude/oauth";
+import type { Profile, UsageSnapshot } from "../types";
 
 describe("parseUsage", () => {
   test("keeps window-shaped keys, drops the rest", () => {
@@ -31,11 +31,19 @@ const SOCK = `/tmp/skipper-usage-test-${process.pid}.sock`;
 try { unlinkSync(SOCK); } catch {}
 
 let usageStatus = 200;
+let refreshCalls = 0;
+let rotateOnRevoked: (() => void) | null = null;
+let rotateOnRefreshFail: (() => void) | null = null;
 const server = Bun.serve({
   unix: SOCK,
   async fetch(req) {
     const url = new URL(req.url);
     if (url.pathname === "/api/oauth/usage") {
+      if (req.headers.get("authorization") === "Bearer revoked-at" && rotateOnRevoked) {
+        const rotate = rotateOnRevoked;
+        rotateOnRevoked = null;
+        rotate(); // simulate another process rotating creds in the store
+      }
       if (req.headers.get("authorization") !== "Bearer fresh-at") {
         return new Response("{}", { status: 401 });
       }
@@ -53,7 +61,13 @@ const server = Bun.serve({
       });
     }
     if (url.pathname === "/v1/oauth/token") {
+      refreshCalls++;
       const body = await req.json();
+      if (body.refresh_token === "race-rt") {
+        rotateOnRefreshFail?.();
+        rotateOnRefreshFail = null;
+        return new Response("{}", { status: 401 });
+      }
       if (body.refresh_token === "dead-rt") return new Response("{}", { status: 401 });
       return Response.json({ access_token: "fresh-at", refresh_token: "rt-2", expires_in: 3600 });
     }
@@ -117,7 +131,7 @@ describe("getProfileUsage", () => {
     expect(snap.error).toBeUndefined();
     expect(snap.windows.five_hour.utilization).toBe(4.0);
     // rotated tokens were written back
-    const { readCreds } = await import("./credentials");
+    const { readCreds } = await import("../providers/claude/credentials");
     const stored = await readCreds(profile.configDir);
     expect(stored!.creds.accessToken).toBe("fresh-at");
     expect(stored!.creds.refreshToken).toBe("rt-2");
@@ -145,5 +159,83 @@ describe("getProfileUsage", () => {
     usageStatus = 500;
     const snap = await getProfileUsage(profile, { fetchFn: unixFetch, usageUrl, tokenUrl });
     expect(snap.error).toBe("usage unavailable");
+  });
+});
+
+describe("auth-failure self-repair", () => {
+  let tmp2: string;
+  let profile2: Profile;
+  beforeEach(() => {
+    usageStatus = 200;
+    tmp2 = mkdtempSync(join(tmpdir(), "skipper-test-"));
+    process.env.SKIPPER_CLAUDE_HOME = join(tmp2, ".claude");
+    const dir = join(tmp2, "profiles", "repair");
+    mkdirSync(dir, { recursive: true });
+    profile2 = { name: "repair", configDir: dir, meta: { agent: "claude", createdAt: "" } };
+  });
+  afterEach(() => {
+    delete process.env.SKIPPER_CLAUDE_HOME;
+    rmSync(tmp2, { recursive: true, force: true });
+  });
+
+  function writeCredsFile(accessToken: string, refreshToken = "good-rt") {
+    writeFileSync(
+      join(profile2.configDir!, ".credentials.json"),
+      credBlob({ accessToken, refreshToken, expiresAt: Date.now() + 3600_000 }),
+    );
+  }
+
+  test("401 with unexpired token: re-reads the store and retries with rotated creds", async () => {
+    writeCredsFile("revoked-at"); // valid expiry, but the server will 401 it
+    rotateOnRevoked = () => writeCredsFile("fresh-at"); // another process rotates mid-flight
+    refreshCalls = 0;
+    const snap = await getProfileUsage(profile2, { fetchFn: unixFetch, usageUrl, tokenUrl });
+    rotateOnRevoked = null;
+    expect(snap.error).toBeUndefined();
+    expect(snap.windows.five_hour.utilization).toBe(4.0);
+    expect(refreshCalls).toBe(0); // repaired by re-read alone - never touched the refresh endpoint
+  });
+
+  test("failed refresh during a rotation race re-reads the store (repair 3)", async () => {
+    writeCredsFile("revoked-at", "race-rt"); // refresh will 401, rotating the store as it fails
+    rotateOnRefreshFail = () => writeCredsFile("fresh-at");
+    const snap = await getProfileUsage(profile2, { fetchFn: unixFetch, usageUrl, tokenUrl });
+    expect(snap.error).toBeUndefined();
+    expect(snap.windows.five_hour.utilization).toBe(4.0);
+  });
+
+  test("401 with no rotation falls back to a forced refresh and retry", async () => {
+    writeCredsFile("revoked-at");
+    refreshCalls = 0;
+    const snap = await getProfileUsage(profile2, { fetchFn: unixFetch, usageUrl, tokenUrl });
+    expect(refreshCalls).toBe(1);
+    expect(snap.windows.five_hour.utilization).toBe(4.0);
+    const { readCreds } = await import("../providers/claude/credentials");
+    expect((await readCreds(profile2.configDir))!.creds.accessToken).toBe("fresh-at");
+  });
+});
+
+describe("mergeSnapshot keep-last-good", () => {
+  const good: UsageSnapshot = {
+    fetchedAt: 100,
+    windows: { five_hour: { utilization: 40, resetsAt: "2026-06-12T00:00:00Z" } },
+  };
+  test("transient failure keeps previous numbers marked stale", () => {
+    const merged = mergeSnapshot(good, { fetchedAt: 200, windows: {}, error: "usage unavailable" });
+    expect(merged.windows.five_hour.utilization).toBe(40);
+    expect(merged.stale).toBe(true);
+    expect(merged.error).toBeUndefined();
+  });
+  test("needs login always surfaces", () => {
+    const merged = mergeSnapshot(good, { fetchedAt: 200, windows: {}, error: "needs login" });
+    expect(merged.error).toBe("needs login");
+  });
+  test("success replaces and clears staleness", () => {
+    const next: UsageSnapshot = { fetchedAt: 300, windows: { five_hour: { utilization: 50, resetsAt: "x" } } };
+    expect(mergeSnapshot({ ...good, stale: true }, next)).toEqual(next);
+  });
+  test("error with no previous data passes through", () => {
+    const err: UsageSnapshot = { fetchedAt: 1, windows: {}, error: "usage unavailable" };
+    expect(mergeSnapshot(undefined, err)).toEqual(err);
   });
 });

@@ -1,7 +1,7 @@
 # skipr
 
-Skipr (Skipper) manages multiple accounts across your coding agents. Claude
-Code is supported today, with more agents planned. If you run more than one
+Skipr (Skipper) manages multiple accounts across your coding agents: Claude
+Code, plus beta support for Codex. If you run more than one
 account (a personal Max plan and a work plan, say) you know the dance: hit a
 rate limit mid-session, log out, log back in as someone else, lose your
 conversation, and never quite know which account has headroom. Skipr turns
@@ -41,6 +41,10 @@ when you're under pace, yellow/red as you run hot).
 - **Usage at a glance**: 5-hour and 7-day rate-limit utilization for every
   account, with reset countdowns, color-coded bars, and a burn-rate pace
   indicator showing whether you're over or under an even spend of the window.
+- **Codex too (beta)**: your `~/.codex` login appears as its own section with
+  live plan and usage (fetched the same way the Codex CLI's /status does,
+  with local session snapshots as the offline fallback); add more Codex
+  accounts the same way as Claude ones (`n`, pick Codex).
 - **One-keystroke launch**: each profile is a fully isolated Claude Code
   config dir; launch any of them side by side in different terminals.
 - **Session hop**: hit a limit mid-conversation? Copy the session transcript
@@ -60,6 +64,8 @@ when you're under pace, yellow/red as you run hot).
 - [Bun](https://bun.sh)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and
   logged in at least once
+- Optional: [Codex CLI](https://developers.openai.com/codex/cli) for the Codex
+  section
 
 ## Install
 
@@ -92,8 +98,8 @@ that account.
 | `↑` / `↓` | select profile |
 | `⏎` | launch selected profile (for non-default profiles flagged `needs login`, starts the login flow instead) |
 | `m` | move a session from another profile into the selected one, then resume it |
-| `n` | new profile |
-| `e` | edit menu for the selected profile: display label, launch command, delete (delete asks you to type the name; the default profile can't be deleted) |
+| `n` | new profile (asks for a name, then the agent: Claude Code or Codex) |
+| `e` | edit menu for the selected profile: display label, launch command, set as default, delete (delete asks you to type the name; adopted home profiles can't be deleted) |
 | `c` | open the config file in `$EDITOR`; the dashboard reloads when you exit the editor |
 | `r` | refresh usage |
 | `q` | quit |
@@ -106,8 +112,9 @@ skipr - multi-account manager for your coding agents (Claude Code today)
 usage:
   skipr                            interactive dashboard
   skipr list                       usage summary for all profiles
-  skipr launch <name> [-- args]    launch a profile directly
+  skipr launch [name] [-- args]    launch a profile (default profile when no name)
   skipr sync                       repair shared-item symlinks
+  skipr default [name]             show or set a provider's default profile
   skipr config                     show config file path and effective config
   skipr config get <key>           read one config value (dot paths ok)
   skipr config set <key> <value>   change a config value (e.g. thresholds.warn 50)
@@ -135,6 +142,26 @@ Claude usage
 (useful after changing `sharedItems`). It never overwrites a real file or
 directory with a symlink - conflicts are reported and skipped.
 
+### Default profiles and the system default
+
+Each provider has a default profile (marked `· default` in the dashboard):
+it's preselected on open, and bare `skipr launch` runs it. Change it from the
+Edit menu (`e` → Set as default) or headlessly with `skipr default <name>`.
+
+To make the default apply to plain `claude` / `codex` outside skipr, source
+skipr's env file from your shell rc once:
+
+```sh
+echo 'source ~/.skipper/env.sh' >> ~/.zshrc
+```
+
+skipr rewrites `~/.skipper/env.sh` whenever a default changes, so every new
+shell picks up the chosen profile via `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+Credentials are never copied between stores - duplicating an OAuth chain
+would break on the next refresh-token rotation - so this stays safe and
+instantly reversible (`skipr default default` / `skipr default codex`).
+Applies to new shells; GUI-launched apps don't read shell rc files.
+
 `skipr config` prints the config file path on the first line, then the
 effective config (your file merged over defaults) as JSON. Every key can
 also be read and written from the CLI with dot paths:
@@ -142,7 +169,8 @@ also be read and written from the CLI with dot paths:
 ```
 skipr config set emailDisplay hide
 skipr config set thresholds.warn 50
-skipr config get defaultProfile.label
+skipr config set providers.claude.launchCommand "claude --dangerously-skip-permissions"
+skipr config get providers.claude.defaultProfile.label
 ```
 
 ## Configuration
@@ -150,12 +178,18 @@ skipr config get defaultProfile.label
 Config lives at `~/.skipper/config.json`. The file - and any individual key -
 is optional; missing keys fall back to defaults.
 
+Configuration is provider-centric: providers (Claude Code, Codex) each carry
+their own launch command and default-profile overrides, and every profile is
+attached to a provider (chosen when you create it).
+
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
-| `defaultLaunchCommand` | `string` | `"claude"` | Command used to launch a profile when it has no per-profile override. |
-| `sharedItems` | `string[]` | `["skills", "agents", "commands", "plugins", "CLAUDE.md"]` | Items symlinked from each profile dir to the real `~/.claude/<item>`. `settings.json` is deliberately not shared by default (permissions/hooks can be identity-specific) but can be added. |
-| `defaultProfile.launchCommand` | `string` | unset | Launch-command override for the `default` profile (which has no `profile.json` of its own). |
-| `defaultProfile.label` | `string` | unset | Display label for the `default` profile. |
+| `defaultProvider` | `"claude" \| "codex"` | `"claude"` | Which provider's section lists first in the dashboard. |
+| `providers.<p>.launchCommand` | `string` | `"claude"` / `"codex"` | Launch command for that provider's profiles when they have no per-profile override. |
+| `providers.<p>.defaultProfile.launchCommand` | `string` | unset | Launch-command override for the provider's adopted default profile (`~/.claude` / `~/.codex`, which have no `profile.json`). |
+| `providers.<p>.defaultProfile.label` | `string` | unset | Display label for that default profile. |
+| `providers.<p>.defaultProfileName` | `string` | unset (the adopted home) | Which profile is the provider's default: dashboard preselect, bare `skipr launch`, and the system default via `~/.skipper/env.sh`. |
+| `sharedItems` | `string[]` | `["skills", "agents", "commands", "plugins", "CLAUDE.md"]` | Items symlinked from each Claude profile dir to the real `~/.claude/<item>`. `settings.json` is deliberately not shared by default (permissions/hooks can be identity-specific) but can be added. |
 | `thresholds.warn` | `number` | `60` | Usage bars and percentages turn yellow when utilization exceeds this. |
 | `thresholds.danger` | `number` | `85` | …and red when utilization exceeds this. |
 | `emailDisplay` | `"show" \| "hide"` | `"show"` | Whether account emails render at all - hide them entirely for screenshots, demos, and streaming (partial masks still leak the address shape, so there is no in-between). Asked once on first run; display-only, nothing on disk changes. (Legacy `"mask"` and `anonymizeEmails: true` are read as `"hide"`.) |
@@ -164,7 +198,14 @@ Example:
 
 ```json
 {
-  "defaultLaunchCommand": "claude --dangerously-skip-permissions",
+  "defaultProvider": "claude",
+  "providers": {
+    "claude": {
+      "launchCommand": "claude --dangerously-skip-permissions",
+      "defaultProfile": { "label": "personal" }
+    },
+    "codex": { "launchCommand": "codex" }
+  },
   "sharedItems": ["skills", "agents", "commands", "plugins", "CLAUDE.md"],
   "thresholds": { "warn": 50, "danger": 80 }
 }
@@ -178,8 +219,10 @@ always safe for credentials.
 
 On first run skipr asks one setup question (email display) and writes the
 full config file; press `c` in the dashboard any time to edit it in `$EDITOR`.
-Resolution order: `profile.json` `launchCommand` → `defaultLaunchCommand` →
-`"claude"`.
+Resolution order: `profile.json` `launchCommand` → the provider's
+`launchCommand` → the provider's binary name. Configs written by older
+versions (flat `defaultLaunchCommand` / `codexLaunchCommand` /
+`defaultProfile` / `codexProfile` keys) migrate automatically.
 
 Set `SKIPPER_HOME` to relocate the data directory away from `~/.skipper`.
 
@@ -216,6 +259,10 @@ Set `SKIPPER_HOME` to relocate the data directory away from `~/.skipper`.
 
 ## Limitations
 
+- Codex support is beta: usage is fetched from the same (unofficial) backend
+  the Codex CLI's /status uses, falling back to the freshest rate-limit
+  snapshot in `$CODEX_HOME/sessions` when offline. Session hopping is
+  Claude-only for now.
 - macOS only (Keychain-based credential handling).
 - Claude Code only, for now. Codex support is planned - the profile model
   already carries an `agent` field, so it slots in without restructuring.

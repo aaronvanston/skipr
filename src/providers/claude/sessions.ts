@@ -2,8 +2,8 @@ import {
   closeSync, copyFileSync, existsSync, mkdirSync, openSync, readSync, readdirSync, statSync,
 } from "node:fs";
 import { join } from "node:path";
-import type { Profile, SessionInfo } from "./types";
-import { claudeHome } from "./paths";
+import type { Profile, SessionInfo } from "../../types";
+import { claudeHome } from "../../paths";
 
 /** Claude Code's projects-dir encoding of a project path. */
 export function projectSlug(projectDir: string): string {

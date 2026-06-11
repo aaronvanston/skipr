@@ -1,6 +1,6 @@
 {
   "name": "skipr",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Multi-account manager for your coding agents (Claude Code today): usage at a glance with burn-rate pacing, one-keystroke profile launch, session hopping",
   "license": "MIT",
   "author": "Aaron Vanston",

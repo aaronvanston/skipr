@@ -4,7 +4,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { planSync, applySync } from "./symlinks";
+import { planSync, applySync } from "../symlinks";
 
 let tmp: string;
 let claudeDir: string;

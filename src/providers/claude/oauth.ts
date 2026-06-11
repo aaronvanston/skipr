@@ -1,4 +1,4 @@
-import type { OauthCreds } from "./types";
+import type { OauthCreds } from "../../types";
 
 export const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 // Claude Code's own public OAuth client id (the same one the official CLI

@@ -18,31 +18,46 @@ export interface ProfileRowProps {
   selected: boolean;
   thresholds?: Thresholds;
   emailDisplay?: EmailDisplay;
+  /** this profile is its provider's default (dashboard preselect, bare launch) */
+  isDefault?: boolean;
+  /** stacking position within the provider group: cards share edges, so a
+   * single separator row sits between profiles instead of two borders */
+  position?: "only" | "first" | "middle" | "last";
 }
 
-export function ProfileRow({ profile, identity, usage, loading, selected, thresholds, emailDisplay = "show" }: ProfileRowProps) {
+const JOINED_TOP = {
+  topLeft: "├", top: "─", topRight: "┤",
+  left: "│", right: "│",
+  bottomLeft: "╰", bottom: "─", bottomRight: "╯",
+} as const;
+
+export function ProfileRow({ profile, identity, usage, loading, selected, thresholds, emailDisplay = "show", isDefault = false, position = "only" }: ProfileRowProps) {
   const tier = tierLabel(identity.tier);
   const displayName = profile.meta.label ?? profile.name;
   const email = identity.email ? (displayEmail(identity.email, emailDisplay) ?? "") : "…";
+  const joined = position === "middle" || position === "last";
   return (
     <Box
       flexDirection="column"
-      borderStyle="round"
-      borderColor={selected ? "cyan" : "gray"}
+      borderStyle={joined ? JOINED_TOP : "round"}
+      borderBottom={position === "only" || position === "last"}
+      borderColor="gray"
       paddingX={1}
     >
       <Box>
         <Text color={selected ? "cyan" : "gray"}>{selected ? "● " : "○ "}</Text>
-        <Text bold={selected}>{displayName.padEnd(10)}</Text>
+        <Text bold={selected} color={selected ? "cyan" : undefined}>{displayName.padEnd(10)}</Text>
         <Text dimColor>{email.padEnd(22)}</Text>
         <Text dimColor>{" │ "}</Text>
         {tier && <Text color="cyan">{`[${tier}]`}</Text>}
+        {isDefault && <Text dimColor> · default</Text>}
         {loading && <Text dimColor> ⟳</Text>}
-        {usage?.error === "needs login" && <Text color="yellow"> ⚠ needs login</Text>}
+        {usage?.stale && !loading && <Text dimColor> · cached</Text>}
+        {usage?.error === "needs login" && <Text color="yellow"> ⚠ needs login · ⏎ to log in</Text>}
       </Box>
-      {usage?.error === "usage unavailable" && (
+      {usage?.error && usage.error !== "needs login" && (
         <Box>
-          <Text dimColor>{"".padEnd(LEFT_WIDTH)} │ usage unavailable</Text>
+          <Text dimColor>{`${"".padEnd(LEFT_WIDTH)} │ ${usage.error}`}</Text>
         </Box>
       )}
       {WINDOW_LABELS.filter(({ key }) => usage?.windows[key]).map(({ key, label }) => {

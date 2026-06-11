@@ -2,8 +2,8 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projectSlug, listSessionsForProject, copySessionTo, firstUserSnippet } from "./sessions";
-import type { Profile } from "./types";
+import { projectSlug, listSessionsForProject, copySessionTo, firstUserSnippet } from "../providers/claude/sessions";
+import type { Profile } from "../types";
 
 describe("projectSlug", () => {
   test("replaces every non-alphanumeric char with dash", () => {

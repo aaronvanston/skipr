@@ -1,5 +1,5 @@
 import { describe, expect, test, afterAll } from "bun:test";
-import { keychainService, keychainRead, keychainWrite, keychainDelete } from "./keychain";
+import { keychainService, keychainRead, keychainWrite, keychainDelete } from "../providers/claude/keychain";
 import { createHash } from "node:crypto";
 
 describe("keychainService", () => {

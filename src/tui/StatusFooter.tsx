@@ -14,7 +14,7 @@ const KEYS: Array<[string, string]> = [
 
 export function StatusFooter() {
   return (
-    <Box borderStyle="round" borderColor="gray" paddingX={1} marginTop={1} alignSelf="stretch">
+    <Box borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
       <Text>
         {KEYS.map(([key, label], i) => (
           <Text key={key}>
