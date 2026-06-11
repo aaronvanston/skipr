@@ -139,8 +139,16 @@ Claude usage
 `--` is appended to its launch command.
 
 `skipr sync` re-creates missing shared-item symlinks across all profiles
-(useful after changing `sharedItems`). It never overwrites a real file or
+(useful after changing a provider's `sharedItems`). It never overwrites a real file or
 directory with a symlink - conflicts are reported and skipped.
+
+### Doctor
+
+`skipr doctor` is the health check: provider binaries on PATH, config
+validity against the schema, every profile's auth state, shared-symlink
+health, overlays pointing at deleted profiles, hidden profiles whose data
+directories remain, defaults that no longer resolve, and whether the
+system-default env file is sourced.
 
 ### Default profiles and the system default
 
@@ -175,40 +183,48 @@ skipr config get providers.claude.defaultProfile.label
 
 ## Configuration
 
-Config lives at `~/.skipper/config.json`. The file - and any individual key -
+Config lives at `~/.skipper/config.toml`. The file - and any individual key -
 is optional; missing keys fall back to defaults.
 
 Configuration is provider-centric: providers (Claude Code, Codex) each carry
-their own launch command and default-profile overrides, and every profile is
-attached to a provider (chosen when you create it).
+their own launch command, shared items, and default-profile overrides, and
+every profile is attached to a provider (chosen when you create it). Every
+key is schema-validated: `skipr config keys` lists them all with types and
+meanings, `set`/`unset` reject typos with pointers, and `skipr doctor` flags
+unknown keys or stale references in your file.
 
 | Key | Type | Default | Meaning |
 |-----|------|---------|---------|
 | `defaultProvider` | `"claude" \| "codex"` | `"claude"` | Which provider's section lists first in the dashboard. |
 | `providers.<p>.launchCommand` | `string` | `"claude"` / `"codex"` | Launch command for that provider's profiles when they have no per-profile override. |
+| `providers.<p>.sharedItems` | `string[]` | claude: `["skills", "agents", "commands", "plugins", "CLAUDE.md"]`, codex: `[]` | Items symlinked from the provider's adopted home into its profiles. Codex sharing is opt-in (its `config.toml` can carry secrets). `settings.json` is deliberately not shared by default. |
 | `providers.<p>.defaultProfile.launchCommand` | `string` | unset | Launch-command override for the provider's adopted default profile (`~/.claude` / `~/.codex`, which have no `profile.json`). |
 | `providers.<p>.defaultProfile.label` | `string` | unset | Display label for that default profile. |
 | `providers.<p>.defaultProfileName` | `string` | unset (the adopted home) | Which profile is the provider's default: dashboard preselect, bare `skipr launch`, and the system default via `~/.skipper/env.sh`. |
-| `sharedItems` | `string[]` | `["skills", "agents", "commands", "plugins", "CLAUDE.md"]` | Items symlinked from each Claude profile dir to the real `~/.claude/<item>`. `settings.json` is deliberately not shared by default (permissions/hooks can be identity-specific) but can be added. |
 | `thresholds.warn` | `number` | `60` | Usage bars and percentages turn yellow when utilization exceeds this. |
 | `thresholds.danger` | `number` | `85` | …and red when utilization exceeds this. |
+| `profiles.<name>.label` | `string` | unset | Rename a profile's display name from config (wins over its `profile.json`). |
+| `profiles.<name>.launchCommand` | `string` | unset | Launch-command override from config. |
+| `profiles.<name>.hidden` | `boolean` | `false` | Hide a profile from the dashboard and `skipr list` without deleting its data; `skipr doctor` reminds you the directory remains. |
 | `emailDisplay` | `"show" \| "hide"` | `"show"` | Whether account emails render at all - hide them entirely for screenshots, demos, and streaming (partial masks still leak the address shape, so there is no in-between). Asked once on first run; display-only, nothing on disk changes. (Legacy `"mask"` and `anonymizeEmails: true` are read as `"hide"`.) |
 
 Example:
 
-```json
-{
-  "defaultProvider": "claude",
-  "providers": {
-    "claude": {
-      "launchCommand": "claude --dangerously-skip-permissions",
-      "defaultProfile": { "label": "personal" }
-    },
-    "codex": { "launchCommand": "codex" }
-  },
-  "sharedItems": ["skills", "agents", "commands", "plugins", "CLAUDE.md"],
-  "thresholds": { "warn": 50, "danger": 80 }
-}
+```toml
+defaultProvider = "claude"
+[providers.claude]
+launchCommand = "claude --dangerously-skip-permissions"
+sharedItems = [ "skills", "agents", "commands", "plugins", "CLAUDE.md" ]
+
+[providers.claude.defaultProfile]
+label = "personal"
+
+[providers.codex]
+launchCommand = "codex"
+
+[thresholds]
+warn = 50
+danger = 80
 ```
 
 Each non-default profile can override its launch command via `launchCommand`
@@ -221,8 +237,9 @@ On first run skipr asks one setup question (email display) and writes the
 full config file; press `c` in the dashboard any time to edit it in `$EDITOR`.
 Resolution order: `profile.json` `launchCommand` → the provider's
 `launchCommand` → the provider's binary name. Configs written by older
-versions (flat `defaultLaunchCommand` / `codexLaunchCommand` /
-`defaultProfile` / `codexProfile` keys) migrate automatically.
+versions migrate automatically - both the flat pre-provider keys and the
+pre-v0.5 `config.json` (converted to TOML once, with the original kept as
+`config.json.bak`).
 
 Set `SKIPPER_HOME` to relocate the data directory away from `~/.skipper`.
 

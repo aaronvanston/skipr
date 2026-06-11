@@ -2,12 +2,14 @@
 import React, { useState } from "react";
 import { Box, Text, render, useApp, useInput } from "ink";
 import type { EmailDisplay, Identity, PendingAction, Profile, UsageCache } from "./types";
-import { DEFAULT_CONFIG, getConfigValue, loadConfig, saveConfig, setConfigValue } from "./config";
+import { DEFAULT_CONFIG, getConfigValue, loadConfig, saveConfig, setConfigValue, unsetConfigValue } from "./config";
 import {
   createProfile, defaultProfileIndex, defaultProfileName, deleteProfile, isDefaultProfile,
   listProfiles, readIdentity, saveLabel, saveLaunchCommand, setDefaultProfile,
 } from "./profiles";
 import { getProfileUsage, mergeSnapshot } from "./usage";
+import { doctorReport } from "./doctor";
+import { CONFIG_SCHEMA } from "./configSchema";
 import { loadUsageCache, saveUsageCache } from "./usageCache";
 import { listSessionsForProject, copySessionTo } from "./providers/claude/sessions";
 import { ADAPTERS } from "./providers/registry";
@@ -16,8 +18,9 @@ import { planSync, applySync } from "./symlinks";
 import { shellSetupHint, writeShellEnv } from "./shellEnv";
 import { WINDOW_LABELS, displayEmail, resetsIn, tierLabel } from "./format";
 import { existsSync } from "node:fs";
-import { configPath } from "./paths";
+import { configPath, legacyConfigJsonPath } from "./paths";
 import { App } from "./tui/App";
+import { stringify as stringifyToml } from "smol-toml";
 import pkg from "../package.json";
 
 export function formatList(
@@ -118,6 +121,10 @@ function Setup({ onChoose }: { onChoose: (value: EmailDisplay) => void }) {
  * the full effective config so `c` (edit config) has a real file to open. */
 async function runSetupIfNeeded(): Promise<void> {
   if (existsSync(configPath())) return;
+  if (existsSync(legacyConfigJsonPath())) {
+    loadConfig(); // migrates the legacy JSON config to TOML in place
+    return;
+  }
   let choice: EmailDisplay = "show";
   const instance = render(<Setup onChoose={(value) => { choice = value; }} />);
   await instance.waitUntilExit();
@@ -134,6 +141,7 @@ function renderOnce(): Promise<PendingAction> {
         profiles={profiles}
         identities={gatherIdentities(profiles)}
         config={config}
+        version={pkg.version}
         loadCache={loadUsageCache}
         fetchUsage={getProfileUsage}
         mergeSnapshot={mergeSnapshot}
@@ -176,10 +184,27 @@ async function runLogin(profile: Profile): Promise<void> {
   }
 }
 
+/** Alternate screen: the dashboard takes over a clean screen and the
+ * terminal's scrollback is restored on exit (and around child sessions). */
+function altScreen(on: boolean): void {
+  if (process.stdout.isTTY) process.stdout.write(on ? "\x1b[?1049h\x1b[H" : "\x1b[?1049l");
+}
+
 async function runTui(): Promise<void> {
+  try {
+    await runTuiLoop();
+  } finally {
+    altScreen(false);
+  }
+}
+
+async function runTuiLoop(): Promise<void> {
+  altScreen(true);
   await runSetupIfNeeded();
   while (true) {
+    altScreen(true);
     const action = await renderOnce();
+    altScreen(false);
     if (action.type === "quit") return;
     if (action.type === "reload") continue;
     if (action.type === "config") {
@@ -245,14 +270,17 @@ function cmdSync(): void {
   const config = loadConfig();
   for (const profile of listProfiles(config)) {
     if (!profile.configDir || profile.meta.agent === "codex") continue;
-    for (const action of applySync(planSync(profile.configDir, config.sharedItems))) {
+    const shared = config.providers[profile.meta.agent].sharedItems;
+    if (shared.length === 0) continue;
+    for (const action of applySync(planSync(profile.configDir, shared))) {
       console.log(`${profile.name}: ${action.item} → ${action.action}`);
     }
   }
 }
 
 export function formatConfigOutput(): string {
-  return `${configPath()}\n${JSON.stringify(loadConfig(), null, 2)}`;
+  const clean = JSON.parse(JSON.stringify(loadConfig()));
+  return `${configPath()}\n${stringifyToml(clean)}`;
 }
 
 function cmdConfig(args: string[]): void {
@@ -277,7 +305,26 @@ function cmdConfig(args: string[]): void {
     console.log(`${path} = ${JSON.stringify(getConfigValue(config, path))}`);
     return;
   }
-  console.error("usage: skipr config [get <key> | set <key> <value>]");
+  if (action === "unset" && path) {
+    const config = loadConfig();
+    try {
+      unsetConfigValue(config, path);
+    } catch (err) {
+      console.error(String(err instanceof Error ? err.message : err));
+      process.exit(1);
+    }
+    saveConfig(config);
+    console.log(`${path} unset`);
+    return;
+  }
+  if (action === "keys") {
+    for (const spec of CONFIG_SCHEMA) {
+      const kind = spec.enum ? spec.enum.join("|") : spec.type;
+      console.log(`${spec.path.padEnd(42)} ${kind.padEnd(12)} ${spec.description}`);
+    }
+    return;
+  }
+  console.error("usage: skipr config [get <key> | set <key> <value> | unset <key> | keys]");
   process.exit(1);
 }
 
@@ -317,9 +364,12 @@ usage:
   skipr launch [name] [-- args]    launch a profile (default profile when no name)
   skipr sync                       repair shared-item symlinks
   skipr default [name]             show or set a provider's default profile
+  skipr doctor                     health check: binaries, config, profiles, auth
   skipr config                     show config file path and effective config
   skipr config get <key>           read one config value (dot paths ok)
   skipr config set <key> <value>   change a config value (e.g. thresholds.warn 50)
+  skipr config unset <key>         revert a config value to its default
+  skipr config keys                list every config key with type and meaning
   skipr --version                  print version
 
 profiles are created from the interactive dashboard (press n).`);
@@ -331,6 +381,7 @@ if (import.meta.main) {
   else if (command === "launch") await cmdLaunch(rest);
   else if (command === "sync") cmdSync();
   else if (command === "default") cmdDefault(rest);
+  else if (command === "doctor") console.log(doctorReport(loadConfig()));
   else if (command === "config") cmdConfig(rest);
   else if (command === "--version" || command === "-v") printVersion();
   else if (command === "--help" || command === "-h" || command === "help") printHelp();

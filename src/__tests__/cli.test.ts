@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { formatList, formatConfigOutput } from "../index";
+import { parse as parseToml } from "smol-toml";
 import { DEFAULT_CONFIG } from "../config";
 import { configPath } from "../paths";
 import type { Profile, UsageCache, Identity } from "../types";
@@ -92,10 +93,11 @@ describe("formatConfigOutput", () => {
       const out = formatConfigOutput();
       const [first, ...rest] = out.split("\n");
       expect(first).toBe(configPath());
-      expect(first).toBe(join(tmp, ".skipper", "config.json"));
-      // no config file exists -> effective config is the defaults, pretty-printed
-      expect(rest.join("\n")).toBe(JSON.stringify(DEFAULT_CONFIG, null, 2));
-      expect(JSON.parse(rest.join("\n")).thresholds).toEqual({ warn: 60, danger: 85 });
+      expect(first).toBe(join(tmp, ".skipper", "config.toml"));
+      // no config file exists -> effective config is the defaults, as TOML
+      const parsed = parseToml(rest.join("\n")) as { thresholds: { warn: number; danger: number } };
+      expect(parsed.thresholds).toEqual({ warn: 60, danger: 85 });
+      expect(parsed).toEqual(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
     } finally {
       delete process.env.SKIPPER_HOME;
       rmSync(tmp, { recursive: true, force: true });

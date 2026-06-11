@@ -24,7 +24,7 @@ describe("paths", () => {
     expect(skipperHome()).toBe(join(tmp, ".skipper"));
     expect(claudeHome()).toBe(join(tmp, ".claude"));
     expect(profilesDir()).toBe(join(tmp, ".skipper", "profiles"));
-    expect(configPath()).toBe(join(tmp, ".skipper", "config.json"));
+    expect(configPath()).toBe(join(tmp, ".skipper", "config.toml"));
     expect(usageCachePath()).toBe(join(tmp, ".skipper", "cache", "usage.json"));
   });
 

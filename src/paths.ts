@@ -18,6 +18,11 @@ export function profilesDir(): string {
 }
 
 export function configPath(): string {
+  return join(skipperHome(), "config.toml");
+}
+
+/** pre-v0.5 config location, migrated automatically on first load */
+export function legacyConfigJsonPath(): string {
   return join(skipperHome(), "config.json");
 }
 

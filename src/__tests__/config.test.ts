@@ -2,7 +2,9 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONFIG, loadConfig, saveConfig, getConfigValue, setConfigValue } from "../config";
+import { DEFAULT_CONFIG, loadConfig, saveConfig, getConfigValue, setConfigValue, unsetConfigValue } from "../config";
+import { parse as parseToml } from "smol-toml";
+import { legacyConfigJsonPath } from "../paths";
 import { configPath } from "../paths";
 
 let tmp: string;
@@ -22,7 +24,8 @@ describe("config", () => {
     expect(loadConfig().providers.claude.launchCommand).toBe("claude");
     expect(loadConfig().providers.codex.launchCommand).toBe("codex");
     expect(loadConfig().defaultProvider).toBe("claude");
-    expect(loadConfig().sharedItems).toContain("skills");
+    expect(loadConfig().providers.claude.sharedItems).toContain("skills");
+    expect(loadConfig().providers.codex.sharedItems).toEqual([]);
   });
 
   test("saveConfig round-trips and merges over defaults on load", () => {
@@ -32,10 +35,10 @@ describe("config", () => {
     const loaded = loadConfig();
     expect(loaded.providers.claude.launchCommand).toBe("claude --dangerously-skip-permissions");
     expect(loaded.providers.codex.launchCommand).toBe("codex"); // untouched provider keeps default
-    expect(loaded.sharedItems).toEqual(DEFAULT_CONFIG.sharedItems);
-    // file is valid pretty JSON
-    expect(JSON.parse(readFileSync(configPath(), "utf8")).providers.claude.launchCommand)
-      .toBe("claude --dangerously-skip-permissions");
+    expect(loaded.providers.claude.sharedItems).toEqual(DEFAULT_CONFIG.providers.claude.sharedItems);
+    // file is valid TOML
+    const raw = parseToml(readFileSync(configPath(), "utf8")) as { providers: { claude: { launchCommand: string } } };
+    expect(raw.providers.claude.launchCommand).toBe("claude --dangerously-skip-permissions");
   });
 
   test("corrupt config falls back to defaults", () => {
@@ -50,12 +53,12 @@ describe("config", () => {
 
   test("loadConfig default-merges thresholds when absent from an existing partial config", () => {
     mkdirSync(join(tmp, ".skipper"), { recursive: true });
-    // partial config written by an older version - no thresholds key at all
-    writeFileSync(configPath(), JSON.stringify({ defaultLaunchCommand: "claude --foo" }));
+    // partial JSON config written by an older version - no thresholds key at all
+    writeFileSync(legacyConfigJsonPath(), JSON.stringify({ defaultLaunchCommand: "claude --foo" }));
     const loaded = loadConfig();
     expect(loaded.providers.claude.launchCommand).toBe("claude --foo"); // legacy key migrates
     expect(loaded.thresholds).toEqual({ warn: 60, danger: 85 });
-    expect(loaded.sharedItems).toEqual(DEFAULT_CONFIG.sharedItems);
+    expect(loaded.providers.claude.sharedItems).toEqual(DEFAULT_CONFIG.providers.claude.sharedItems);
   });
 
   test("loadConfig keeps custom thresholds from the file", () => {
@@ -65,13 +68,13 @@ describe("config", () => {
 
   test("partial thresholds override deep-merges per key over defaults", () => {
     mkdirSync(join(tmp, ".skipper"), { recursive: true });
-    writeFileSync(configPath(), JSON.stringify({ thresholds: { warn: 50 } }));
+    writeFileSync(configPath(), '[thresholds]\nwarn = 50\n');
     expect(loadConfig().thresholds).toEqual({ warn: 50, danger: 85 });
   });
 
   test("non-numeric threshold values fall back to defaults per key", () => {
     mkdirSync(join(tmp, ".skipper"), { recursive: true });
-    writeFileSync(configPath(), JSON.stringify({ thresholds: { warn: "high", danger: 70 } }));
+    writeFileSync(configPath(), '[thresholds]\nwarn = "high"\ndanger = 70\n');
     expect(loadConfig().thresholds).toEqual({ warn: 60, danger: 70 });
   });
 });
@@ -108,23 +111,25 @@ describe("config get/set helpers", () => {
   });
 
   test("legacy anonymizeEmails:true and the old mask mode map to hide", () => {
-    writeFileSync(configPath(), JSON.stringify({ anonymizeEmails: true }));
-    expect(loadConfig().emailDisplay).toBe("hide");
-    writeFileSync(configPath(), JSON.stringify({ emailDisplay: "mask" }));
-    expect(loadConfig().emailDisplay).toBe("hide");
-    writeFileSync(configPath(), JSON.stringify({ anonymizeEmails: true, emailDisplay: "show" }));
-    expect(loadConfig().emailDisplay).toBe("show"); // explicit key wins
+    const legacyLoad = (fixture: object) => {
+      rmSync(configPath(), { force: true }); // each legacy load gets a fresh migration
+      writeFileSync(legacyConfigJsonPath(), JSON.stringify(fixture));
+      return loadConfig();
+    };
+    expect(legacyLoad({ anonymizeEmails: true }).emailDisplay).toBe("hide");
+    expect(legacyLoad({ emailDisplay: "mask" }).emailDisplay).toBe("hide");
+    expect(legacyLoad({ anonymizeEmails: true, emailDisplay: "show" }).emailDisplay).toBe("show");
   });
 
   test("invalid emailDisplay values fall back to show", () => {
-    writeFileSync(configPath(), JSON.stringify({ emailDisplay: "nonsense" }));
+    writeFileSync(configPath(), 'emailDisplay = "nonsense"\n');
     expect(loadConfig().emailDisplay).toBe("show");
   });
 });
 
 describe("provider config migration", () => {
   test("legacy flat keys migrate into providers and are stripped", () => {
-    writeFileSync(configPath(), JSON.stringify({
+    writeFileSync(legacyConfigJsonPath(), JSON.stringify({
       defaultLaunchCommand: "claude --dsp",
       codexLaunchCommand: "codex --full-auto",
       defaultProfile: { label: "Main", launchCommand: "claude --resume" },
@@ -138,10 +143,13 @@ describe("provider config migration", () => {
     for (const legacy of ["defaultLaunchCommand", "codexLaunchCommand", "defaultProfile", "codexProfile"]) {
       expect(legacy in loaded).toBe(false);
     }
+    // migration persisted: TOML written, JSON renamed to .bak
+    expect(readFileSync(configPath(), "utf8")).toContain("[providers.claude]");
+    expect(() => readFileSync(legacyConfigJsonPath(), "utf8")).toThrow();
   });
 
   test("explicit providers keys beat legacy keys", () => {
-    writeFileSync(configPath(), JSON.stringify({
+    writeFileSync(legacyConfigJsonPath(), JSON.stringify({
       defaultLaunchCommand: "old-claude",
       providers: { claude: { launchCommand: "new-claude" } },
     }));
@@ -151,5 +159,36 @@ describe("provider config migration", () => {
   test("invalid defaultProvider falls back to claude", () => {
     writeFileSync(configPath(), JSON.stringify({ defaultProvider: "gemini" }));
     expect(loadConfig().defaultProvider).toBe("claude");
+  });
+});
+
+describe("config schema extras", () => {
+  test("legacy top-level sharedItems migrates to claude's provider", () => {
+    rmSync(configPath(), { force: true });
+    writeFileSync(legacyConfigJsonPath(), JSON.stringify({ sharedItems: ["skills"] }));
+    const loaded = loadConfig();
+    expect(loaded.providers.claude.sharedItems).toEqual(["skills"]);
+    expect("sharedItems" in loaded).toBe(false);
+  });
+
+  test("profile overlays merge and hidden filters; schema validates set", () => {
+    const c = structuredClone(DEFAULT_CONFIG);
+    setConfigValue(c, "profiles.work2.label", "Personal");
+    setConfigValue(c, "profiles.work2.hidden", "true");
+    expect(c.profiles?.work2).toEqual({ label: "Personal", hidden: true });
+    expect(() => setConfigValue(c, "profiles.work2.nope", "1")).toThrow(/unknown config key/);
+    expect(() => setConfigValue(c, "thresholds", "5")).toThrow(/is a section/);
+    expect(() => setConfigValue(c, "emailDisplay", "purple")).toThrow(/one of/);
+    expect(() => setConfigValue(c, "thresholds.warn", "high")).toThrow(/expected a number/);
+    setConfigValue(c, "providers.claude.sharedItems", '["skills","CLAUDE.md"]');
+    expect(c.providers.claude.sharedItems).toEqual(["skills", "CLAUDE.md"]);
+  });
+
+  test("unsetConfigValue reverts optionals", () => {
+    const c = structuredClone(DEFAULT_CONFIG);
+    setConfigValue(c, "providers.claude.defaultProfileName", "work2");
+    unsetConfigValue(c, "providers.claude.defaultProfileName");
+    expect(c.providers.claude.defaultProfileName).toBeUndefined();
+    expect(() => unsetConfigValue(c, "bogus.path")).toThrow(/unknown config key/);
   });
 });

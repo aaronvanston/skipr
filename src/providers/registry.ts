@@ -23,10 +23,10 @@ export interface ProviderAdapter {
   usage(configDir: string | null, deps?: UsageDeps): Promise<UsageSnapshot>;
   /** auth env vars that would override the profile's identity if leaked */
   scrubEnv: string[];
+  /** items symlinked from the adopted home into new profiles by default */
+  defaultSharedItems: string[];
   /** session transcripts can hop between this provider's profiles */
   supportsSessionHop: boolean;
-  /** symlink config.sharedItems into new profiles */
-  sharesItems: boolean;
 }
 
 export const ADAPTERS: Record<Provider, ProviderAdapter> = {
@@ -40,8 +40,8 @@ export const ADAPTERS: Record<Provider, ProviderAdapter> = {
     identity: readClaudeIdentity,
     usage: getClaudeUsage,
     scrubEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
+    defaultSharedItems: ["skills", "agents", "commands", "plugins", "CLAUDE.md"],
     supportsSessionHop: true,
-    sharesItems: true,
   },
   codex: {
     id: "codex",
@@ -53,8 +53,9 @@ export const ADAPTERS: Record<Provider, ProviderAdapter> = {
     identity: readCodexIdentity,
     usage: (configDir) => codexUsageSmart(configDir),
     scrubEnv: ["OPENAI_API_KEY"],
+    // codex's config.toml can carry secrets; sharing is opt-in per item
+    defaultSharedItems: [],
     supportsSessionHop: false,
-    sharesItems: false,
   },
 };
 

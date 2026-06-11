@@ -22,7 +22,7 @@ function readMeta(configDir: string): ProfileMeta {
 /** Ordered for display: per provider (defaultProvider first), the adopted
  * default profile then that provider's named profiles. The codex default
  * only appears when ~/.codex exists. */
-export function listProfiles(config: SkipperConfig): Profile[] {
+export function listProfiles(config: SkipperConfig, opts: { includeHidden?: boolean } = {}): Profile[] {
   const named: Profile[] = [];
   const dir = profilesDir();
   if (existsSync(dir)) {
@@ -49,7 +49,14 @@ export function listProfiles(config: SkipperConfig): Profile[] {
     }
     profiles.push(...named.filter((p) => p.meta.agent === provider));
   }
-  return profiles;
+  // config overlays win over profile.json; hidden profiles drop out entirely
+  return profiles
+    .map((profile) => {
+      const overlay = config.profiles?.[profile.name];
+      if (!overlay) return profile;
+      return { ...profile, meta: { ...profile.meta, ...overlay } };
+    })
+    .filter((profile) => opts.includeHidden || !(config.profiles?.[profile.name]?.hidden ?? false));
 }
 
 export function createProfile(name: string, config: SkipperConfig, agent: AgentKind = "claude"): Profile {
@@ -60,7 +67,8 @@ export function createProfile(name: string, config: SkipperConfig, agent: AgentK
   mkdirSync(configDir, { recursive: true });
   const meta: ProfileMeta = { agent, createdAt: new Date().toISOString() };
   writeFileAtomic(join(configDir, "profile.json"), JSON.stringify(meta, null, 2) + "\n");
-  if (ADAPTERS[agent].sharesItems) applySync(planSync(configDir, config.sharedItems));
+  const shared = config.providers[agent].sharedItems;
+  if (shared.length > 0) applySync(planSync(configDir, shared));
   return { name, configDir, meta };
 }
 

@@ -14,6 +14,7 @@ export interface AppServices {
   profiles: Profile[];
   identities: Record<string, Identity>;
   config: SkipperConfig;
+  version: string;
   loadCache(): UsageCache;
   fetchUsage(profile: Profile): Promise<UsageSnapshot>;
   mergeSnapshot(previous: UsageSnapshot | undefined, next: UsageSnapshot): UsageSnapshot;
@@ -222,7 +223,11 @@ export function App(props: AppServices) {
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Text bold>skipr</Text>
+      <Box>
+        <Text color="cyan">{"⛵ "}</Text>
+        <Text bold>skipr</Text>
+        <Text dimColor>{` v${props.version}`}</Text>
+      </Box>
       <Text> </Text>
       {[...new Set(props.profiles.map((p) => p.meta.agent))].map((agent) => {
         const group = props.profiles.filter((p) => p.meta.agent === agent);

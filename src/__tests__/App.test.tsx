@@ -24,6 +24,7 @@ function makeServices(over: Partial<AppServices> = {}): { services: AppServices;
       work: { email: "w@b.com", tier: "default_claude_max_5x" },
     },
     config: DEFAULT_CONFIG,
+    version: "0.0.0-test",
     loadCache: () => ({}),
     fetchUsage: async () => SNAP,
     mergeSnapshot: (_prev, next) => next,

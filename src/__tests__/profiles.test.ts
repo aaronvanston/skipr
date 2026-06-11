@@ -164,3 +164,21 @@ describe("codex profiles", () => {
     expect(listProfiles(flipped).map((p) => p.name)).toEqual(["codex", "default", "work"]);
   });
 });
+
+describe("config profile overlays", () => {
+  test("overlay label/launchCommand win over profile.json; hidden filters out", () => {
+    const p = createProfile("work", config);
+    saveLabel(p, "From File");
+    const overlaid = {
+      ...config,
+      profiles: { work: { label: "From Config", launchCommand: "claude --special" } },
+    };
+    const seen = listProfiles(overlaid).find((x) => x.name === "work")!;
+    expect(seen.meta.label).toBe("From Config");
+    expect(seen.meta.launchCommand).toBe("claude --special");
+
+    const hiding = { ...config, profiles: { work: { hidden: true } } };
+    expect(listProfiles(hiding).map((x) => x.name)).toEqual(["default"]);
+    expect(listProfiles(hiding, { includeHidden: true }).map((x) => x.name)).toEqual(["default", "work"]);
+  });
+});
