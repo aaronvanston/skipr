@@ -1,0 +1,47 @@
+{
+  "name": "skipr",
+  "version": "0.3.0",
+  "description": "Multi-account manager for your coding agents (Claude Code today): usage at a glance with burn-rate pacing, one-keystroke profile launch, session hopping",
+  "license": "MIT",
+  "author": "Aaron Vanston",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aaronvanston/skipr"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "tui",
+    "cli",
+    "profiles",
+    "rate-limits"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "type": "module",
+  "bin": {
+    "skipr": "./src/index.tsx"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx"
+  ],
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "ink": "^5.2.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^18.3.0",
+    "ink-testing-library": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}
